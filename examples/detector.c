@@ -558,8 +558,80 @@ void validate_detector_recall(char *cfgfile, char *weightfile)
     }
 }
 
+void save_result_txt( 
+    char* result_file_name,  
+    detection *dets, 
+    int num, 
+    float thresh, 
+    char **names, 
+    image **alphabet, 
+    int classes )
+{
+    int i,j;
+    FILE* fpResult = fopen( result_file_name, "w" );
+    if ( !fpResult )
+    {
+        printf("wrong save file: %s\n", result_file_name );
+        return;
+    }
 
-void test_detector(char *datacfg, char *cfgfile, char *weightfile, char *filename, float thresh, float hier_thresh, char *outfile, int fullscreen)
+    for(i = 0; i < num; ++i){
+        char labelstr[4096] = {0};
+        int class = -1;
+        for(j = 0; j < classes; ++j){
+            if (dets[i].prob[j] > thresh){
+                if (class < 0) {
+                    strcat(labelstr, names[j]);
+                    class = j;
+                } else {
+                    strcat(labelstr, ", ");
+                    strcat(labelstr, names[j]);
+                }
+                printf("%s: %.0f%%\n", names[j], dets[i].prob[j]*100);
+            }
+        }
+        if(class >= 0){
+
+            int label = 0;
+            if ( strcmp(labelstr, "trunck")==0 )
+            {
+                label = 2;
+            }
+            else if ( strcmp(labelstr, "car")==0 )
+            {
+                label = 1;
+            }
+            if ( !label )
+            {
+                continue;
+            }
+            box b = dets[i].bbox;
+            fprintf( fpResult, "%d %f %f %f %f\n", label, b.x, b.y, b.w, b.h );
+            /*
+               if(0){
+               width = pow(prob, 1./2.)*10+1;
+               alphabet = 0;
+               }
+             */
+        }
+    }
+
+    fclose( fpResult );
+}
+
+
+void test_detector(
+            char *datacfg, 
+            char *cfgfile, 
+            char *weightfile,
+            char *filename,
+            float thresh,
+            float hier_thresh,
+            char *outfile,
+            int fullscreen,
+            char* img_pre_path,
+            char* result_save_path
+         )
 {
     list *options = read_data_cfg(datacfg);
     char *name_list = option_find_str(options, "names", "data/names.list");
@@ -571,20 +643,26 @@ void test_detector(char *datacfg, char *cfgfile, char *weightfile, char *filenam
     srand(2222222);
     double time;
     char buff[256];
+    char all_path[256];
     char *input = buff;
     float nms=.45;
-    while(1){
-        if(filename){
-            strncpy(input, filename, 256);
-        } else {
-            printf("Enter Image Path: ");
-            fflush(stdout);
-            input = fgets(input, 256, stdin);
-            if(!input) return;
-            strtok(input, "\n");
-        }
-        image im = load_image_color(input,0,0);
+    FILE* fpList = fopen( filename, "r" );
+
+    while(!feof(fpList)){
+        fscanf( fpList, "%s", input );
+        
+        sprintf( all_path, "%s/%s", img_pre_path, input );
+        printf("processing %s\n", all_path );
+
+        image im = load_image_color(all_path,0,0);
         image sized = letterbox_image(im, net->w, net->h);
+
+        //Save result 
+        char base_name[256];
+
+        strncpy( base_name, input, strlen(input)-4 );
+        sprintf( all_path, "%s/%s.txt", result_save_path, base_name );
+
         //image sized = resize_image(im, net->w, net->h);
         //image sized2 = resize_max(im, net->w);
         //image sized = crop_image(sized2, -((net->w - sized2.w)/2), -((net->h - sized2.h)/2), net->w, net->h);
@@ -602,22 +680,20 @@ void test_detector(char *datacfg, char *cfgfile, char *weightfile, char *filenam
         //if (nms) do_nms_obj(boxes, probs, l.w*l.h*l.n, l.classes, nms);
         if (nms) do_nms_sort(dets, nboxes, l.classes, nms);
         draw_detections(im, dets, nboxes, thresh, names, alphabet, l.classes);
+        save_result_txt( all_path, dets, nboxes, thresh, names, alphabet, l.classes );
+        
         free_detections(dets, nboxes);
-        if(outfile){
-            save_image(im, outfile);
-        }
-        else{
-            save_image(im, "predictions");
+        
 #ifdef OPENCV
-            make_window("predictions", 512, 512, 0);
-            show_image(im, "predictions", 0);
+        make_window("predictions", 512, 512, 0);
+        show_image(im, "predictions", 0);
 #endif
-        }
-
         free_image(im);
         free_image(sized);
-        if (filename) break;
+
+        //if (filename) break;
     }
+    fclose( fpList );
 }
 
 /*
@@ -833,7 +909,12 @@ void run_detector(int argc, char **argv)
     char *cfg = argv[4];
     char *weights = (argc > 5) ? argv[5] : 0;
     char *filename = (argc > 6) ? argv[6]: 0;
-    if(0==strcmp(argv[2], "test")) test_detector(datacfg, cfg, weights, filename, thresh, hier_thresh, outfile, fullscreen);
+    char *pre_path = (argc > 7) ? argv[7]: 0;
+    char* save_path = (argc > 8) ? argv[8]: 0;
+
+    if(0==strcmp(argv[2], "test")) test_detector(datacfg, cfg, weights, 
+        filename, thresh, hier_thresh, outfile, fullscreen, pre_path, save_path );
+
     else if(0==strcmp(argv[2], "train")) train_detector(datacfg, cfg, weights, gpus, ngpus, clear);
     else if(0==strcmp(argv[2], "valid")) validate_detector(datacfg, cfg, weights, outfile);
     else if(0==strcmp(argv[2], "valid2")) validate_detector_flip(datacfg, cfg, weights, outfile);
